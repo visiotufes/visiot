@@ -1,0 +1,95 @@
+#!/bin/bash
+
+# Stop on first error
+set -e
+
+printf "[.] Compilling Ispace\n"
+
+cd ispace/cpp/
+./clean > /dev/null
+./compile > /dev/null
+
+printf "[x] Done!\n"
+
+printf "[.] Compilling Utils\n"
+
+cd ../../utils/
+make clean > /dev/null
+make -j4 > /dev/null
+
+printf "[x] Done!\n"
+
+printf "[.] Compilling Cameras\n"
+
+cd ../cameras/
+
+for d in `find ./* -maxdepth 0 -type d`
+do
+	printf " [..] Compiling $d\n"
+	cd $d
+	make clean > /dev/null 
+	make -j4 > /dev/null
+	cd publisher
+	make clean > /dev/null
+	make -j4 > /dev/null
+	cd ../../
+	printf " [x]Done!\n"
+done
+
+printf "[x] Done!\n"
+
+printf "[.] Compilling Robots\n"
+
+cd ../robots/
+
+for d in `find ./* -maxdepth 0 -type d`
+do
+	printf " [..] Compiling $d\n"
+	cd $d
+	make clean > /dev/null 
+	make -j4 > /dev/null
+	cd publisher
+	make clean > /dev/null
+	make -j4 > /dev/null
+	cd ../../
+	printf " [x]Done!\n"
+done
+
+printf "[x] Done!\n"
+
+printf "[.] Compilling Services\n"
+
+cd ../services/
+
+for d in `find ./* -maxdepth 0 -type d ! -name "bin"`
+do
+	printf " [..] Compiling $d\n"
+	cd $d
+	make clean > /dev/null
+	make -j4 > /dev/null
+	cd service/
+	make clean > /dev/null
+	make -j4 > /dev/null
+	cd ../../
+	printf " [x]Done!\n"
+done
+
+printf "[x] Done!\n"
+
+printf "[.] Compilling Examples\n"
+
+cd ../examples/
+
+for d in `find ./* -maxdepth 0 -type d ! -name "bin" ! -name "all"`
+do
+	printf " [..] Compiling $d\n"
+	cd $d
+	make clean > /dev/null
+	make -j4 > /dev/null
+	cd ../
+	printf " [x]Done!\n"
+done
+
+printf "[x] Done!\n"
+
+cd ..

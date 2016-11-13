@@ -1,0 +1,225 @@
+#ifndef SYNC_SERVICE_UTILS_HPP
+#define SYNC_SERVICE_UTILS_HPP
+
+#include <string>
+#include <chrono>
+#include <iostream>
+#include <iomanip>
+#include <limits>
+#include <boost/circular_buffer.hpp>
+
+#include "subscriber.hpp"
+#include "service-client.hpp"
+#include "../sync.hpp"
+
+using namespace std;
+using namespace std::chrono;
+using namespace std::chrono_literals;
+
+namespace is {
+
+struct SubTimestamp {
+    is::Subscriber sub;
+    int64_t ts;
+    float fps;
+
+    SubTimestamp(auto channel, string entity) :
+            sub(channel, entity + ".timestamp") {
+    }
+
+    void consume() {
+        std::tuple<int64_t, float> payload;
+        this->sub.consume(payload);
+        this->ts = std::get<0>(payload);
+        this->fps = std::get<1>(payload);
+    }
+};
+
+float mean(const boost::circular_buffer<float>& b) {
+  return std::accumulate(b.begin(), b.end(), 0)/b.size();
+}
+
+Sync sync_entities(string broker, vector<string> entities) {
+
+	unsigned int ne = entities.size();
+	// Create timestamp subscribers
+  	vector<SubTimestamp> subscribers;
+
+	for (auto& e : entities) {
+    	auto channel = is::connect(broker, 5672, { "ispace", "ispace", "/" }); 
+    	subscribers.push_back(SubTimestamp(channel, e));
+  	}
+    
+    cout << "Listening... " << endl; 
+  
+  	// Create trigger delay client
+  	auto channel = is::connect(broker, 5672, { "ispace", "ispace", "/" });
+  	is::ServiceClient clientDelay(channel);
+
+  	bool first = true;
+  	vector<float> delays(ne, 0.0);
+  	vector<boost::circular_buffer<float>> ts_samples(ne);
+  	for (auto& d : ts_samples) { d.set_capacity(10); }
+  	bool fpschange = false;
+  	unsigned int nsamples = 10;
+
+  	// Init delays with 0.0
+  	set<unsigned int> recvids;
+  	for (auto& e : entities) {
+    	auto id = clientDelay.request(e + ".delay", 0.0);
+    	recvids.insert(id);
+  	}
+
+  	auto ids = clientDelay.receive(recvids, 1000);
+
+  	if (ids.empty()) {
+    	cout << "Nothing was received :(" << endl;
+  	}
+
+  	for (auto& id : ids) {
+    	string reply;
+    	clientDelay.consume(id, reply);
+    	cout << "id: " << id << ", received: " << reply << endl;
+  	}
+
+  	// Discard 3 samples
+  	for (int i=0; i<3; i++) {
+    	for (auto& s : subscribers) { s.consume(); } 
+  	}
+
+  	unsigned int reference = 0;
+  	unsigned int old_reference = 0;
+  
+  	// Get samples
+  	for (unsigned int n = 0; n < nsamples; ++n) {
+    	// Consume data
+    	for (auto& s : subscribers) { s.consume(); } 
+    	// Verifies that all are the same fps
+    	if (n==0) {
+      		float first_fps = subscribers.front().fps;
+      		for (auto& s : subscribers) {
+        		if (s.fps != first_fps) {
+          			cout << "Exiting.. different fps" << endl;
+          			return Sync::different_fps;
+        		}
+      		}
+    	}
+
+    	old_reference = reference;
+    	// Get the latest timestamp
+    	int64_t max = 0;
+    	for (unsigned int i = 0; i < ne; i++) {
+        	auto s = subscribers[i];
+        	if (s.ts > max) {
+          		max = s.ts;
+          		reference = i;
+        	}
+    	}
+
+    	// Calculate delays between entities
+    	cout << "ref: " << reference << "\told_ref: " << old_reference << '\t' << flush;
+
+    	for (unsigned int i = 0; i < ne; i++) {
+      		auto s = subscribers[i];
+      		auto diff = nanoseconds(max - s.ts);
+      		float dt = duration_cast<milliseconds>(diff).count();
+      		while (dt > 1000/s.fps){
+        		dt -= 1000/s.fps;
+      		}
+      		if (dt > 950/s.fps) {
+        		dt = 1000/s.fps - dt;
+      		}
+      
+      		if (reference != old_reference) {
+        		ts_samples[i].clear();
+        		n = 0;
+      		} 
+      		ts_samples[i].push_back(dt);
+      
+      		cout << std::fixed << std::setw(6) << std::setprecision(4) << dt << '\t' << flush;
+      		//cout << dt << '\t' << flush;
+    	}
+    	cout << '\n' << flush;
+  	} // End of sampling
+
+  	// Calculate average delay
+  	for (unsigned int i = 0; i < ne; i++) {
+    	if (i != reference) {
+      		delays[i] = mean(ts_samples[i])/1000.0;
+    	} else {
+      		delays[i] = 1.0/subscribers[i].fps;
+    	}
+    	cout << std::fixed << std::setw(6) << std::setprecision(4) << delays[i] << '\t' << flush;
+    	//cout << delays[i] << '\t' << flush;
+  	}
+  	cout << '\n' << flush;
+
+  	// Apply delays
+	recvids.clear();
+  	for (unsigned int i = 0; i < ne; i++) {
+    	auto id = clientDelay.request(entities[i] + ".delay", delays[i]);
+    	recvids.insert(id);
+  	}
+
+  	ids.clear();
+  	ids = clientDelay.receive(recvids, 1000);
+
+  	if (ids.empty()) {
+    	std::cout << "Nothing was received :(" << std::endl;
+  		return Sync::fail;
+  	}
+
+  	for (auto& id : ids) {
+    	std::string reply;
+    	clientDelay.consume(id, reply);
+    	std::cout << "id: " << id << ", received: " << reply << std::endl;
+  	}
+
+
+  	/*************************************************************************************/
+  	// verify!
+/*
+*/
+  for (unsigned int n = 0; n < 100; ++n) {
+    // Consume data
+    for (auto& s : subscribers) {
+      s.consume();
+    }
+
+    // Get the latest timestamp
+    int64_t max = 0;
+    for (unsigned int i = 0; i < ne; i++) {
+        auto s = subscribers[i];
+        if (s.ts > max) {
+          max = s.ts;
+          reference = i;
+        }
+    }
+ 
+    // Calculate delays between entities
+    for (unsigned int i = 0; i < ne; i++) {
+      auto s = subscribers[i];
+      auto diff = nanoseconds(max - s.ts);
+      float dt = duration_cast<milliseconds>(diff).count();
+      while (dt > 1000/s.fps){
+        dt -= 1000/s.fps;
+      }
+      if (dt > 950/s.fps) {
+        dt = 1000/s.fps - dt;
+      }
+        ts_samples[i].push_back(dt);
+        cout << dt << '\t' << flush;
+    }
+    cout << '\n' << flush;
+  
+  }
+  	/*************************************************************************************/
+
+  	return Sync::success;
+}
+
+} // ::is
+
+
+
+#endif // SYNC_SERVICE_UTILS_HPP

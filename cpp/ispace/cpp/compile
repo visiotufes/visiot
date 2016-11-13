@@ -1,0 +1,6 @@
+#!/bin/bash
+
+cd lib
+make -j4
+cd ../example
+make -j4

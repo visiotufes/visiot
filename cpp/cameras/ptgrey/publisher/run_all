@@ -1,0 +1,28 @@
+#!/bin/bash
+#GigEConfigCmd -a > /dev/null
+#sleep 3
+ip_list=`GigEConfigCmd | grep IP | cut -d ':' -f 2 | cut -d ' ' -f 2`
+set -f
+ips=(${ip_list// / })
+
+host="localhost"
+
+if [ $# -eq 0 ]
+then
+	fps="1.0"
+else
+ 	host="$1"
+fi
+
+pub_command="gnome-terminal"
+
+entity_id=0
+
+for ip in "${ips[@]}"
+do
+	pub_command="$pub_command --tab -e \"bash -c \\\"./publisher-one $host $ip $entity_id $fps; exec bash\\\"\""
+	((entity_id++))
+done
+
+#echo $pub_command
+bash -c "$pub_command"
